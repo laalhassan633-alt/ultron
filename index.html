@@ -605,9 +605,71 @@ async function sendVoice(blob) {
   }
 }
 
+var audioCtx = null;
+var analyser = null;
+var silenceTimer = null;
+var levelPoll = null;
+var SILENCE_MS = 1600;   // stop after 1.6s of quiet
+var MAX_CHUNK_MS = 12000; // hard cap per chunk
+var MIN_VOICE_MS = 600;   // need at least 0.6s of speech before sending
+var speechStartTime = 0;
+var heardSpeech = false;
+
+function setupAudioAnalysis() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var src = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+    } catch (e) { analyser = null; }
+  }
+}
+
+function currentLevel() {
+  if (!analyser) return 0;
+  var data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteTimeDomainData(data);
+  var sum = 0;
+  for (var i = 0; i < data.length; i++) { var v = (data[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / data.length);
+}
+
+function watchSilence() {
+  clearTimeout(silenceTimer);
+  if (levelPoll) clearInterval(levelPoll);
+  var lastLoud = Date.now();
+  heardSpeech = false;
+  speechStartTime = Date.now();
+  levelPoll = setInterval(function () {
+    if (!micOn) { clearInterval(levelPoll); return; }
+    var level = currentLevel();
+    if (level > 0.02) {
+      lastLoud = Date.now();
+      heardSpeech = true;
+    } else if (heardSpeech && (Date.now() - lastLoud) > SILENCE_MS) {
+      // user paused after speaking -> cut and send
+      clearInterval(levelPoll);
+      stopChunkNow();
+    }
+  }, 120);
+  // hard cap
+  silenceTimer = setTimeout(stopChunkNow, MAX_CHUNK_MS);
+}
+
+function stopChunkNow() {
+  clearTimeout(silenceTimer);
+  if (levelPoll) { clearInterval(levelPoll); levelPoll = null; }
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    try { mediaRecorder.stop(); } catch (e) {}
+  }
+}
+
 function startChunk() {
   if (!micOn || !micStream) return;
   try {
+    setupAudioAnalysis();
     audioChunks = [];
     var mime = "";
     if (window.MediaRecorder) {
@@ -620,22 +682,22 @@ function startChunk() {
     mediaRecorder = new MediaRecorder(micStream, { mimeType: mime });
     mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
     mediaRecorder.onstop = function () {
+      clearTimeout(silenceTimer);
+      if (levelPoll) { clearInterval(levelPoll); levelPoll = null; }
       var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-      if (blob.size > 300) {
+      var longEnough = heardSpeech && (Date.now() - speechStartTime) > MIN_VOICE_MS;
+      if (blob.size > 300 && longEnough) {
         processingChunk = true;
         sendVoice(blob).finally(function () {
           processingChunk = false;
-          if (micOn) startChunk(); // keep listening
+          if (micOn) startChunk();
         });
       } else {
-        // nothing meaningful said — immediately listen again
         if (micOn) startChunk();
       }
     };
     mediaRecorder.start();
-    setTimeout(function () {
-      if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-    }, CHUNK_MS);
+    watchSilence();
   } catch (e) { sys("Recording error: " + ((e && e.message) || "unknown")); if (micOn) setTimeout(startChunk, 1200); }
 }
 
@@ -692,6 +754,8 @@ async function micTurnOn() {
 function micTurnOff() {
   micOn = false;
   micUI(false);
+  clearTimeout(silenceTimer);
+  if (levelPoll) { clearInterval(levelPoll); levelPoll = null; }
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     try { mediaRecorder.onstop = null; mediaRecorder.stop(); } catch (e) {}
   }
