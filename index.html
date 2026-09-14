@@ -110,6 +110,20 @@
   #orbMic.rec { background: #dc2626; border-color: #dc2626; color: #fff; animation: pulse 1s infinite; }
   #orbMic.hidden { display: none; }
 
+  /* ---------- quick actions ---------- */
+  #quickActions {
+    position: relative; z-index: 6;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    padding: 8px 12px 0;
+  }
+  #quickActions button {
+    background: rgba(0,0,0,.5); border: 1px solid var(--panel-border);
+    color: var(--accent); font-size: 9px; letter-spacing: .05em;
+    padding: 8px 2px; border-radius: 8px; cursor: pointer; font-family: inherit;
+    text-align: center;
+  }
+  #quickActions button:active { background: var(--accent-soft); }
+
   /* ---------- chat ---------- */
   #chat {
     position: relative; z-index: 5;
@@ -212,6 +226,13 @@ window.addEventListener('load', function () {
   <button type="button" id="orbMic" title="Voice input">&#127908;</button>
 </div>
 
+<div id="quickActions">
+  <button data-cmd="Research this topic for me: ">🔍 Research</button>
+  <button data-cmd="Check my unread emails and summarize them">📧 Emails</button>
+  <button data-cmd="What can you do for me? List your capabilities.">⚡ Capabilities</button>
+  <button data-cmd="Remember this for me: ">🧠 Remember</button>
+</div>
+
 <div id="chat"></div>
 
 <div id="keybox">
@@ -241,6 +262,9 @@ window.addEventListener('load', function () {
     <div class="sp-label">ORB GLOW <span id="glowVal">100%</span></div>
     <input class="sp-slider" id="glowSlider" type="range" min="0" max="2.5" step="0.1" value="1">
 
+    <div class="sp-label">VOICE SPEED <span id="rateVal">1.0×</span></div>
+    <input class="sp-slider" id="rateSlider" type="range" min="0.6" max="1.6" step="0.05" value="1">
+
     <div class="sp-label">INTERFACE</div>
     <div class="sp-toggles">
       <label class="sp-toggle">SCANLINES <input type="checkbox" id="tglScan" checked></label>
@@ -269,7 +293,7 @@ var BGS = [
   ["royal","#231a4d","#0a0518"],["slate","#24344d","#0a0f16"],["aurora","#073b45","#1c0838"],
   ["sunset","#4a1e0a","#2c0a3a"],["charcoal","#2a2d34","#0d0e11"],["graphite","#3a3e46","#0c0d10"]
 ];
-var S = { accent: "#ffae2b", bgFrom: "#000000", bgTo: "#000000", glow: 1, scan: true, vig: true, grid: true, speak: true };
+var S = { accent: "#ffae2b", bgFrom: "#000000", bgTo: "#000000", glow: 1, scan: true, vig: true, grid: true, speak: true, voiceRate: 1 };
 try { Object.assign(S, JSON.parse(localStorage.getItem("ultron_mobile_settings") || "{}")); } catch (e) {}
 function saveSettings() { try { localStorage.setItem("ultron_mobile_settings", JSON.stringify(S)); } catch (e) {} }
 function applySettings() {
@@ -322,6 +346,13 @@ document.getElementById("glowSlider").addEventListener("input", function (e) {
   document.getElementById("glowVal").textContent = Math.round(S.glow * 100) + "%";
   saveSettings();
 });
+document.getElementById("rateSlider").value = S.voiceRate || 1;
+document.getElementById("rateVal").textContent = (S.voiceRate || 1).toFixed(2) + "×";
+document.getElementById("rateSlider").addEventListener("input", function (e) {
+  S.voiceRate = Number(e.target.value);
+  document.getElementById("rateVal").textContent = S.voiceRate.toFixed(2) + "×";
+  saveSettings();
+});
 document.getElementById("tglScan").checked = S.scan;
 document.getElementById("tglVig").checked = S.vig;
 document.getElementById("tglGrid").checked = S.grid;
@@ -347,6 +378,10 @@ var orbState = "idle";
 function setOrbState(s) {
   orbState = s;
   document.getElementById("orbState").textContent = s.toUpperCase();
+  if (navigator.vibrate) {
+    if (s === "speaking") navigator.vibrate(30);
+    else if (s === "listening") navigator.vibrate([20, 40, 20]);
+  }
 }
 function resizeOrb() {
   var st = document.getElementById("orbStage");
@@ -460,11 +495,32 @@ try {
 })();
 
 function setOnline(on) { dot.classList.toggle("on", on); }
+var lastStreamEl = null;
 function addMsg(cls, text, meta) {
   var d = document.createElement("div");
-  d.className = "msg " + cls; d.textContent = text;
-  if (meta) { var m = document.createElement("div"); m.className = "meta"; m.textContent = meta; d.appendChild(m); }
-  chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+  d.className = "msg " + cls;
+  chat.appendChild(d);
+  if (cls === "ultron") {
+    lastStreamEl = d;
+    streamText(d, text, meta);
+  } else {
+    d.textContent = text;
+    if (meta) { var m = document.createElement("div"); m.className = "meta"; m.textContent = meta; d.appendChild(m); }
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+function streamText(el, text, meta) {
+  var i = 0;
+  el.textContent = "";
+  var step = function () {
+    var chunk = Math.max(1, Math.round(text.length / 60));
+    i = Math.min(text.length, i + chunk);
+    el.textContent = text.slice(0, i);
+    chat.scrollTop = chat.scrollHeight;
+    if (i < text.length) { setTimeout(step, 18); }
+    else if (meta) { var m = document.createElement("div"); m.className = "meta"; m.textContent = meta; el.appendChild(m); }
+  };
+  step();
 }
 function sys(text) { var d = document.createElement("div"); d.className = "sys"; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; }
 function saveState() { try { localStorage.setItem("ultron_key", apiKey); localStorage.setItem("ultron_session", sessionId); localStorage.setItem("ultron_personality", personality); } catch (e) {} }
@@ -494,6 +550,7 @@ async function speak(text, persona) {
     var blob = await res.blob();
     if (!blob || blob.size < 100) return;
     audio = new Audio(URL.createObjectURL(blob));
+    try { audio.playbackRate = S.voiceRate || 1; } catch (e) {}
     setOrbState("speaking");
     audio.onended = function () { setOrbState("idle"); };
     audio.play().catch(function(){ setOrbState("idle"); });
@@ -771,6 +828,23 @@ function micTurnOff() {
     if (micOn) micTurnOff(); else micTurnOn();
   });
 })();
+
+/* quick actions */
+document.querySelectorAll("#quickActions button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var cmd = b.getAttribute("data-cmd");
+    if (cmd.endsWith(": ")) {
+      // needs user input — put it in the input box and focus
+      var inp = document.getElementById("in");
+      inp.value = cmd;
+      inp.focus();
+      inp.setSelectionRange(inp.value.length, inp.value.length);
+    } else {
+      if (!apiKey) { keybox.style.display = "block"; return; }
+      send(cmd);
+    }
+  });
+});
 
 applySettings();
 if (apiKey) { keybox.style.display = "none"; setOnline(true); sys("Connected to " + personality + ". Say something."); }
