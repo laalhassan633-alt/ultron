@@ -609,9 +609,9 @@ var audioCtx = null;
 var analyser = null;
 var silenceTimer = null;
 var levelPoll = null;
-var SILENCE_MS = 1600;   // stop after 1.6s of quiet
+var SILENCE_MS = 2200;   // stop after 2.2s of quiet
 var MAX_CHUNK_MS = 12000; // hard cap per chunk
-var MIN_VOICE_MS = 600;   // need at least 0.6s of speech before sending
+var MIN_VOICE_MS = 500;   // need at least 0.5s of speech before sending
 var speechStartTime = 0;
 var heardSpeech = false;
 
@@ -645,7 +645,7 @@ function watchSilence() {
   levelPoll = setInterval(function () {
     if (!micOn) { clearInterval(levelPoll); return; }
     var level = currentLevel();
-    if (level > 0.02) {
+    if (level > 0.012) {
       lastLoud = Date.now();
       heardSpeech = true;
     } else if (heardSpeech && (Date.now() - lastLoud) > SILENCE_MS) {
@@ -653,7 +653,7 @@ function watchSilence() {
       clearInterval(levelPoll);
       stopChunkNow();
     }
-  }, 120);
+  }, 150);
   // hard cap
   silenceTimer = setTimeout(stopChunkNow, MAX_CHUNK_MS);
 }
